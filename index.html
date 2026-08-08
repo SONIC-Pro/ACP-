@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1890ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ACP刷题">
+<title>阿里云大模型 ACP 刷题系统</title>
+<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="logo" id="btn-home" title="回到首页">☁️ <span>阿里云大模型 ACP 刷题系统</span></div>
+    <nav class="topnav">
+      <button class="nav-btn" data-nav="home">📚 章节练习</button>
+      <button class="nav-btn" data-nav="exams">📝 试卷题库</button>
+      <button class="nav-btn" data-nav="stars">⭐ 收藏夹 <span class="badge" id="star-count">0</span></button>
+      <button class="nav-btn" data-nav="wrongs">❌ 错题本 <span class="badge" id="wrong-count">0</span></button>
+      <button class="nav-btn" data-nav="stats">📊 统计</button>
+    </nav>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<footer class="footer">
+  数据来源：章节习题集 / 模拟考试（一、三、四、五，第二套无答案版未收录）/ 模拟题001~006 / 综合题库（655题）/ 326题题库 / 553题题库（XLSX版）· 共 <span id="total-count"></span> 题 · 进度保存在本地浏览器
+</footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script>
+  // 注册 Service Worker（仅 HTTPS 或 localhost 下生效）
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('./sw.js').catch(function (err) {
+        console.log('SW 注册失败:', err);
+      });
+    });
+  }
+</script>
+</body>
+</html>
