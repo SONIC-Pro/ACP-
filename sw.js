@@ -1,5 +1,5 @@
 /* PWA Service Worker - ACP刷题离线缓存 */
-const CACHE_NAME = 'acp-quiz-v1';
+const CACHE_NAME = 'acp-quiz-v2';
 const ASSETS = [
   './',
   './index.html',

@@ -203,8 +203,20 @@
         '<td>' + (p.done ? Math.round(p.ok / p.done * 100) + '%' : '--') + '</td>' +
         '<td><span class="mini-bar"><i style="width:' + pct + '%"></i></span>' + pct + '%</td></tr>';
     });
-    html += '</table><p style="margin-top:18px"><button class="danger-link" id="btn-reset">清空全部做题记录（不可恢复）</button></p>';
+    html += '</table><p style="margin-top:18px">' +
+      '<button class="btn" id="btn-export">📤 导出进度</button> ' +
+      '<button class="btn" id="btn-import">📥 导入进度</button>' +
+      '<button class="danger-link" id="btn-reset" style="margin-left:12px">清空全部做题记录（不可恢复）</button></p>' +
+      '<p class="page-sub" style="margin-top:8px">导出会下载一个 JSON 备份文件，可发送到其他设备后点"导入进度"合并（手机端刷题进度 → 电脑端本地应用）</p>';
     main.innerHTML = html;
+    document.getElementById('btn-export').addEventListener('click', exportProgress);
+    document.getElementById('btn-import').addEventListener('click', function () {
+      var inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.json,application/json';
+      inp.onchange = function () { if (inp.files && inp.files[0]) importProgress(inp.files[0]); };
+      inp.click();
+    });
     document.getElementById('btn-reset').addEventListener('click', function () {
       if (confirm('确定清空全部做题记录、错题本与收藏吗？此操作不可恢复。')) {
         store = { records: {}, stars: [], wrongs: [] };
@@ -213,6 +225,52 @@
         renderStats();
       }
     });
+  }
+
+  /* ================= 进度导出 / 导入（跨设备同步） ================= */
+  function exportProgress() {
+    var d = new Date();
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    var data = JSON.stringify({ v: 1, ts: d.toISOString(), store: store }, null, 2);
+    var blob = new Blob([data], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'acp-quiz-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function importProgress(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var data = JSON.parse(reader.result);
+        if (!data || !data.store) throw new Error('格式不正确');
+        var ext = data.store;
+        // 合并：records 按题覆盖，stars/wrongs 取并集
+        var nRec = 0, nStar = 0, nWrong = 0;
+        Object.keys(ext.records || {}).forEach(function (k) {
+          if (!store.records[k]) nRec++;
+          store.records[k] = ext.records[k];
+        });
+        (ext.stars || []).forEach(function (id) {
+          if (store.stars.indexOf(id) < 0) { store.stars.push(id); nStar++; }
+        });
+        (ext.wrongs || []).forEach(function (id) {
+          if (store.wrongs.indexOf(id) < 0) { store.wrongs.push(id); nWrong++; }
+        });
+        save();
+        updateBadges();
+        renderStats();
+        alert('导入成功！新增做题记录 ' + nRec + ' 条、收藏 ' + nStar + ' 个、错题 ' + nWrong + ' 个');
+      } catch (e) {
+        alert('导入失败：不是有效的备份文件（应为本应用导出的 .json 文件）');
+      }
+    };
+    reader.readAsText(file);
   }
 
   /* ================= 练习页 ================= */
