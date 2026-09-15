@@ -504,30 +504,6 @@
     });
   }
 
-  /* 键盘快捷键：←/→ 切题，A-F 选择，回车提交多选 */
-  document.addEventListener('keydown', function (e) {
-    if (!P || !P.list.length) return;
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    if (e.key === 'ArrowLeft') moveTo(P.idx - 1);
-    else if (e.key === 'ArrowRight') moveTo(P.idx + 1);
-    else {
-      var q = P.list[P.idx];
-      var answered = P.recite || P.submitted[q.id];
-      if (answered) return;
-      var k = e.key.toUpperCase();
-      if (k >= 'A' && k <= 'F' && (k.charCodeAt(0) - 65) < q.opts.length) {
-        if (q.type === 'single') submit(q, [k]);
-        else {
-          var i = P.picked.indexOf(k);
-          if (i >= 0) P.picked.splice(i, 1); else P.picked.push(k);
-          renderQuestion();
-        }
-      } else if (e.key === 'Enter' && q.type === 'multi' && P.picked.length) {
-        submit(q, P.picked.slice());
-      }
-    }
-  });
-
   /* ================= 启动 ================= */
   document.getElementById('total-count').textContent = QS.length;
   updateBadges();
