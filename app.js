@@ -15,11 +15,15 @@
   var STORE_KEY = 'acp_quiz_v1';
   var store = load();
   function load() {
+    var s = { records: {}, stars: [], wrongs: [] };
     try {
-      var s = JSON.parse(localStorage.getItem(STORE_KEY));
-      if (s && s.records) return s;
+      var raw = JSON.parse(localStorage.getItem(STORE_KEY));
+      if (raw && raw.records) s = raw;
     } catch (e) {}
-    return { records: {}, stars: [], wrongs: [] };
+    // 清理题库中已不存在的题目引用（题库去重后旧 id 失效）
+    s.stars = (s.stars || []).filter(function (id) { return QMAP[id]; });
+    s.wrongs = (s.wrongs || []).filter(function (id) { return QMAP[id]; });
+    return s;
   }
   function save() { localStorage.setItem(STORE_KEY, JSON.stringify(store)); }
 

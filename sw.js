@@ -1,5 +1,5 @@
 /* PWA Service Worker - ACP刷题离线缓存 */
-const CACHE_NAME = 'acp-quiz-v3';
+const CACHE_NAME = 'acp-quiz-v7';
 const ASSETS = [
   './',
   './index.html',
@@ -40,12 +40,19 @@ self.addEventListener('activate', e => {
 });
 
 /* 拦截请求：stale-while-revalidate 策略
-   先返回缓存（秒开），同时后台拉取更新（下次生效） */
+   先返回缓存（秒开），同时后台拉取更新（下次生效）。
+   关键：网络拉取一律带时间戳参数 —— 中间人（卡巴斯基）按 URL 缓存且
+   无视 Cache-Control，裸 URL 的后台更新会被喂回任意旧版本内容，
+   连 SW 缓存都会被二次投毒（2026-09-16 实录：v4 缓存被写回古董 data.js）。
+   缓存仍以原始 URL 为 key 存放，不影响命中与离线可用。 */
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return;
   e.respondWith(
     caches.match(e.request).then(cached => {
-      const fetchPromise = fetch(e.request).then(resp => {
+      const bust = e.request.url + (url.search ? '&' : '?') + '_swb=' + Date.now();
+      const fetchPromise = fetch(bust, { cache: 'reload' }).then(resp => {
         if (resp && resp.ok && resp.type === 'basic') {
           const clone = resp.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
