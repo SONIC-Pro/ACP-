@@ -255,3 +255,10 @@ h2.page-title { font-size: 20px; margin-bottom: 4px; }
 .mini-bar { display: inline-block; width: 90px; height: 6px; background: #edf1f7; border-radius: 3px; overflow: hidden; vertical-align: 1px; margin-right: 6px; }
 .mini-bar i { display: block; height: 100%; background: var(--green); }
 .danger-link { color: var(--red); cursor: pointer; font-size: 12.5px; text-decoration: underline; background: none; border: none; }
+
+/* ===== 防丢失提示横幅 ===== */
+#guard-area { max-width: 1100px; margin: 0 auto; width: 100%; padding: 0 16px; }
+#guard-area:empty { display: none; }
+.guard-banner { margin-top: 10px; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; line-height: 1.5; box-shadow: var(--shadow); }
+.guard-banner.danger { background: var(--red-bg); color: var(--red); border: 1px solid #f5b5b5; }
+.guard-banner.warn { background: #fff8e6; color: var(--amber); border: 1px solid #f5dfae; }

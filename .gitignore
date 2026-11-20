@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+
+# 进度导出/备份文件（个人数据，勿入库）
+acp-quiz-*.json
+
+# 个人学习资料与事故核对产物（公开仓库，不含隐私）
+刷题总结.md
+刷题聊天记录*.json
+recovery-review.html
+chat-*.txt

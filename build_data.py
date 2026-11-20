@@ -800,7 +800,7 @@ def main():
     print('== 553题 XLSX ==')
     p553 = os.path.join(ROOT, '阿里云大模型ACP-553题-2', '阿里云大模型ACP-553题-2.xlsx')
     if os.path.exists(p553):
-        add_source('bank553xlsx', '553题题库（XLSX版，含解析）', 'bank', parse_553_xlsx(p553))
+        print('  [跳过] XLSX 来源选项损坏，已按用户要求移除')
 
     # 7. 30题 PDF (OCR)
     print('== 30题 PDF (OCR) ==')
@@ -840,6 +840,8 @@ def main():
         'chapters': [{'id': c, 'title': t} for c, t in CHAPTERS],
         'sources': sources,
         'questions': all_qs,
+        'bankId': hashlib.sha256(json.dumps(all_qs, ensure_ascii=False,
+            sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest(),
     }
     js = 'window.QUIZ_DATA = ' + json.dumps(data, ensure_ascii=False) + ';'
     io.open(OUT, 'w', encoding='utf-8').write(js)

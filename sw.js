@@ -1,11 +1,15 @@
 /* PWA Service Worker - ACP刷题离线缓存 */
-const CACHE_NAME = 'acp-quiz-v8';
+const CACHE_NAME = 'acp-quiz-v12-guard';
 const ASSETS = [
   './',
   './index.html',
-  './app.js',
-  './style.css',
-  './data.js',
+  './app.js?v=12-guard',
+  './style.css?v=12-guard',
+  './data.js?v=12-guard',
+  './progress.js?v=12-guard',
+  './guard.js?v=12-guard',
+  './recovery-seed.js?v=12-guard',
+  './recovery-review.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
@@ -30,13 +34,9 @@ self.addEventListener('install', e => {
   );
 });
 
-/* 激活：清理旧缓存 */
+/* 恢复期间保留旧缓存作为证据；fetch 仅从当前版本缓存读取。 */
 self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
-  );
+  e.waitUntil(self.clients.claim());
 });
 
 /* 拦截请求：stale-while-revalidate 策略
@@ -50,7 +50,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
   e.respondWith(
-    caches.match(e.request).then(cached => {
+    caches.open(CACHE_NAME).then(cache => cache.match(e.request)).then(cached => {
       const bust = e.request.url + (url.search ? '&' : '?') + '_swb=' + Date.now();
       const fetchPromise = fetch(bust, { cache: 'reload' }).then(resp => {
         if (resp && resp.ok && resp.type === 'basic') {

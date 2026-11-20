@@ -11,21 +11,49 @@
   var CHAP_MAP = {};
   DATA.chapters.forEach(function (c) { CHAP_MAP[c.id] = c; });
 
-  /* ================= 本地存储 ================= */
-  var STORE_KEY = 'acp_quiz_v1';
-  var store = load();
-  function load() {
-    var s = { records: {}, stars: [], wrongs: [] };
-    try {
-      var raw = JSON.parse(localStorage.getItem(STORE_KEY));
-      if (raw && raw.records) s = raw;
-    } catch (e) {}
-    // 清理题库中已不存在的题目引用（题库去重后旧 id 失效）
-    s.stars = (s.stars || []).filter(function (id) { return QMAP[id]; });
-    s.wrongs = (s.wrongs || []).filter(function (id) { return QMAP[id]; });
-    return s;
+  /* ================= 本地存储 + 外层防丢失 ================= */
+  var recovery = window.QUIZ_RECOVERY;
+  var progress, guard, store, booted = false, pendingGate = false;
+  try {
+    progress = window.QuizProgress.create(DATA, recovery,
+      recovery && recovery.bankId === DATA.bankId ? recovery.knownLegacy : [], localStorage);
+    guard = window.QuizGuard.create(localStorage, DATA.bankId);
+    // 场景 a：进度键消失但恢复种子还在 → 疑似整站数据被清，明确警告，绝不静默播种
+    var emptyInfo = guard.detectEmpty(progress.key, recovery && recovery.bankId === DATA.bankId);
+    if (emptyInfo && emptyInfo.hasSeed) {
+      var proceed = confirm(
+        '⚠️ 浏览器数据疑似被清除\n\n' +
+        '应用找不到任何本地进度（localStorage 为空），但内置的 10/30 恢复种子存在。\n' +
+        '直接继续会用 10/30 存档播种，你最近的作答可能已经丢失。\n\n' +
+        '【取消】= 先导入最新备份文件（推荐）\n【确定】= 知晓风险，继续用播种存档');
+      if (!proceed) {
+        pendingGate = true; // 不播种、不写入，先进恢复引导页；恢复后由 boot() 正常启动
+        store = { records: {}, stars: [], wrongs: [] };
+      }
+    }
+    if (!pendingGate) {
+      store = progress.load();
+      if (guard.watermark() === null) guard.markSaved(Object.keys(store.records).length); // 首次启用防护：以现状建立水位线
+    }
+  } catch (e) {
+    document.getElementById('main').textContent = '已停止加载以保护原记录：' + e.message;
+    return;
   }
-  function save() { localStorage.setItem(STORE_KEY, JSON.stringify(store)); }
+  // 场景 b：非显式操作导致记录数骤降 → 拒绝写入；成功后刷新水位线并调度自动备份
+  function save(explicit) {
+    var count = Object.keys(store.records).length;
+    var res = guard.checkSave(count);
+    if (!res.ok && !explicit) {
+      alert('⛔ 已拒绝写入（数据骤降保护）\n\n当前作答数 ' + count + ' 条，少于上次保存时的 ' + res.prev +
+        ' 条，且这不是显式操作（重做/重置/导入）。存储未被改动。\n' +
+        '请先"📤 导出进度"保全现场，再判断原因；必要时用"📥 导入进度"从备份恢复。');
+      return false;
+    }
+    progress.save(store);
+    guard.markSaved(count);
+    scheduleBackup();
+    return true;
+  }
 
   function record(qid, picked, ok) {
     store.records[qid] = { my: picked, ok: ok, ts: Date.now() };
@@ -41,6 +69,19 @@
     save();
     updateBadges();
     return i < 0;
+  }
+  // 重做本题：清空已做记录，错题本同步移除；收藏不受影响
+  function redo(qid) {
+    if (!confirm('确定要重做这道题吗？\n\n将清空这道题的已做记录；若错题本中有这道题，也会一并移除。收藏不受影响。')) return;
+    delete store.records[qid];
+    var wi = store.wrongs.indexOf(qid);
+    if (wi >= 0) store.wrongs.splice(wi, 1);
+    save(true); // 显式操作：重做导致记录数减 1，不走骤降拦截
+    updateBadges();
+    delete P.submitted[qid]; // 本次会话内也恢复为未作答
+    P.picked = [];
+    renderQuestion();
+    renderSheet();
   }
   function updateBadges() {
     document.getElementById('star-count').textContent = store.stars.length;
@@ -107,6 +148,8 @@
 
   function renderHome() {
     var html = '<h2 class="page-title">📚 分章节练习</h2>' +
+      (recovery && recovery.bankId === DATA.bankId ?
+        '<div class="page-sub">已移除 XLSX 题库及其中 4 条作答，其他历史作答、收藏和错题保留。<a href="recovery-review.html" target="_blank">查看移除前的原始恢复核对清单</a></div>' : '') +
       '<div class="page-sub">按课程章节刷题（含章节习题集 + 各题库按知识点自动归类的题目），点击章节开始练习</div>' +
       '<div class="card-grid">';
     DATA.chapters.forEach(function (c) {
@@ -211,9 +254,25 @@
       '<button class="btn" id="btn-export">📤 导出进度</button> ' +
       '<button class="btn" id="btn-import">📥 导入进度</button>' +
       '<button class="danger-link" id="btn-reset" style="margin-left:12px">清空全部做题记录（不可恢复）</button></p>' +
-      '<p class="page-sub" style="margin-top:8px">导出会下载一个 JSON 备份文件，可发送到其他设备后点"导入进度"合并（手机端刷题进度 → 电脑端本地应用）</p>';
+      '<p style="margin-top:10px"><button class="btn" id="btn-backup-dir">🗄️ ' +
+      (dirHandle && backupNeedsPermission ? '🔑 点击恢复自动备份授权' : (dirHandle ? '🗄️ 重新选择 / 停用自动备份文件夹' : '🗄️ 设置自动备份文件夹')) +
+      '</button><br><span class="page-sub">' + esc(backupStatusText()) + '</span></p>' +
+      '<p class="page-sub" style="margin-top:8px">导出包含完整题库快照与进度。同题库导入按作答时间合并，收藏取并集；不同题库拒绝导入，避免错位。无题库的旧格式仅接受本次已核验的原始备份。</p>';
     main.innerHTML = html;
     document.getElementById('btn-export').addEventListener('click', exportProgress);
+    document.getElementById('btn-backup-dir').addEventListener('click', function () {
+      if (dirHandle && backupNeedsPermission) {
+        dirHandle.requestPermission({ mode: 'readwrite' }).then(function (p) {
+          if (p === 'granted') { backupNeedsPermission = false; doBackup(); renderStats(); }
+        });
+      } else if (dirHandle) {
+        if (confirm('自动备份当前已启用。\n\n【确定】= 重新选择备份文件夹（需再次授权）\n【取消】= 停用自动备份（只清除授权设置，不删除已备份文件）')) pickBackupDir();
+        else {
+          dirHandle = null; backupNeedsPermission = false; lastBackupName = null;
+          idbDel('backupDir').then(function () { refreshGuardUI(); renderStats(); });
+        }
+      } else pickBackupDir();
+    });
     document.getElementById('btn-import').addEventListener('click', function () {
       var inp = document.createElement('input');
       inp.type = 'file';
@@ -224,7 +283,7 @@
     document.getElementById('btn-reset').addEventListener('click', function () {
       if (confirm('确定清空全部做题记录、错题本与收藏吗？此操作不可恢复。')) {
         store = { records: {}, stars: [], wrongs: [] };
-        save();
+        save(true); // 显式重置：允许骤降（归零）
         updateBadges();
         renderStats();
       }
@@ -235,7 +294,7 @@
   function exportProgress() {
     var d = new Date();
     var pad = function (n) { return String(n).padStart(2, '0'); };
-    var data = JSON.stringify({ v: 1, ts: d.toISOString(), store: store }, null, 2);
+    var data = JSON.stringify(progress.export(store), null, 2);
     var blob = new Blob([data], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -245,6 +304,8 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    guard.markExported(Object.keys(store.records).length, Date.now()); // 催导出横幅据此消失
+    refreshGuardUI();
   }
 
   function importProgress(file) {
@@ -252,26 +313,15 @@
     reader.onload = function () {
       try {
         var data = JSON.parse(reader.result);
-        if (!data || !data.store) throw new Error('格式不正确');
-        var ext = data.store;
-        // 合并：records 按题覆盖，stars/wrongs 取并集
-        var nRec = 0, nStar = 0, nWrong = 0;
-        Object.keys(ext.records || {}).forEach(function (k) {
-          if (!store.records[k]) nRec++;
-          store.records[k] = ext.records[k];
-        });
-        (ext.stars || []).forEach(function (id) {
-          if (store.stars.indexOf(id) < 0) { store.stars.push(id); nStar++; }
-        });
-        (ext.wrongs || []).forEach(function (id) {
-          if (store.wrongs.indexOf(id) < 0) { store.wrongs.push(id); nWrong++; }
-        });
-        save();
+        var ext = progress.readImport(data);
+        var next = progress.merge(store, ext);
+        store = next;
+        save(true); // 导入合并只增不减，显式操作不受骤降拦截
         updateBadges();
         renderStats();
-        alert('导入成功！新增做题记录 ' + nRec + ' 条、收藏 ' + nStar + ' 个、错题 ' + nWrong + ' 个');
+        alert('导入完成！当前做题记录 ' + Object.keys(store.records).length + ' 条、收藏 ' + store.stars.length + ' 个、错题 ' + store.wrongs.length + ' 个');
       } catch (e) {
-        alert('导入失败：不是有效的备份文件（应为本应用导出的 .json 文件）');
+        alert('导入失败：' + e.message + '\n现有记录未改动。');
       }
     };
     reader.readAsText(file);
@@ -419,9 +469,10 @@
     if (!showAnswer && q.type === 'multi') {
       html += '<button class="btn primary" id="btn-submit"' + (P.picked.length ? '' : ' disabled') + '>提交答案</button>';
     }
-    if (P.ctx.collection === 'stars') {
-      html += '<span class="spacer"></span><button class="btn" id="btn-unstar">移出收藏夹</button>';
-    }
+    var trailing = '';
+    if (store.records[q.id]) trailing += '<button class="btn" id="btn-redo" title="清空本题已做记录，错题本同步移除，收藏保留">🔄 重做本题</button>';
+    if (P.ctx.collection === 'stars') trailing += '<button class="btn" id="btn-unstar">移出收藏夹</button>';
+    if (trailing) html += '<span class="spacer"></span>' + trailing;
     html += '</div></div>';
 
     area.innerHTML = html;
@@ -434,6 +485,8 @@
     });
     document.getElementById('btn-prev').addEventListener('click', function () { moveTo(P.idx - 1); });
     document.getElementById('btn-next').addEventListener('click', function () { moveTo(P.idx + 1); });
+    var redoBtn = document.getElementById('btn-redo');
+    if (redoBtn) redoBtn.addEventListener('click', function () { redo(q.id); });
     var unstar = document.getElementById('btn-unstar');
     if (unstar) unstar.addEventListener('click', function () {
       toggleStar(q.id);
@@ -508,8 +561,202 @@
     });
   }
 
+  /* ================= 自动备份到磁盘（File System Access API） ================= */
+  var FS_SUPPORTED = typeof window.showDirectoryPicker === 'function';
+  var dirHandle = null, backupNeedsPermission = false, lastBackupName = null, backupError = null;
+  var backupTimer = null;
+
+  function idbOpen() {
+    return new Promise(function (resolve, reject) {
+      var req = indexedDB.open('acp-quiz-guard', 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore('kv'); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+  function idbOp(mode, fn) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction('kv', mode);
+        fn(tx.objectStore('kv'));
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+  function idbGet(key) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var req = db.transaction('kv', 'readonly').objectStore('kv').get(key);
+        req.onsuccess = function () { resolve(req.result === undefined ? null : req.result); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+  function idbSet(key, val) { return idbOp('readwrite', function (s) { s.put(val, key); }); }
+  function idbDel(key) { return idbOp('readwrite', function (s) { s.delete(key); }); }
+
+  function backupStatusText() {
+    if (!FS_SUPPORTED) return '当前环境不支持 File System Access API（如 file:// 直接打开或旧浏览器），自动备份不可用，请务必定期手动导出。';
+    if (dirHandle && backupNeedsPermission) return '自动备份文件夹已配置，但浏览器要求重新授权，点击上方按钮恢复。';
+    if (dirHandle) return '自动备份已启用：防抖 30 秒写入带时间戳 JSON，保留最近 ' + window.QuizGuard.KEEP_BACKUPS +
+      ' 份轮转' + (lastBackupName ? '，最新：' + lastBackupName : '') + (backupError ? '；上次失败：' + backupError : '');
+    return '尚未配置：选择一个备份文件夹后，每次作答保存会自动写出完整 JSON 备份。';
+  }
+
+  function pickBackupDir() {
+    if (!FS_SUPPORTED) {
+      alert('当前浏览器/环境不支持 File System Access API（file:// 打开或旧浏览器），无法自动备份到磁盘，请使用"📤 导出进度"手动备份。');
+      return;
+    }
+    window.showDirectoryPicker({ mode: 'readwrite', id: 'acp-quiz-backup' }).then(function (h) {
+      dirHandle = h; backupNeedsPermission = false; backupError = null;
+      return idbSet('backupDir', h);
+    }).then(doBackup).then(function () {
+      alert('自动备份已设置。备份文件名格式：acp-quiz-backup-YYYYMMDD-HHMMSS.json，保留最近 ' + window.QuizGuard.KEEP_BACKUPS + ' 份。');
+      if (document.querySelector('.nav-btn.active[data-nav="stats"]')) renderStats();
+    }).catch(function (e) {
+      if (e && e.name === 'AbortError') return; // 用户取消选择
+      backupError = e && e.message ? e.message : String(e);
+      alert('设置自动备份失败：' + backupError + '\n（file:// 环境下此 API 不可用，请改用手动导出。）');
+      refreshGuardUI();
+    });
+  }
+
+  function scheduleBackup(delay) {
+    if (!dirHandle) return;
+    clearTimeout(backupTimer);
+    backupTimer = setTimeout(doBackup, delay || 30000);
+  }
+
+  function doBackup() {
+    if (!dirHandle) return Promise.resolve();
+    clearTimeout(backupTimer); backupTimer = null;
+    return Promise.resolve().then(function () {
+      if (!dirHandle.queryPermission) return;
+      return dirHandle.queryPermission({ mode: 'readwrite' }).then(function (p) {
+        if (p === 'granted') return;
+        backupNeedsPermission = true;
+        throw new Error('备份文件夹权限待用户重新授权');
+      });
+    }).then(function () {
+      var name = window.QuizGuard.backupName(new Date());
+      var payload = progress.export(store);
+      payload.guard = { watermark: Object.keys(store.records).length, via: 'auto' }; // 水位线双写；readImport 忽略额外字段
+      return dirHandle.getFileHandle(name, { create: true }).then(function (fh) {
+        return fh.createWritable().then(function (w) {
+          return w.write(JSON.stringify(payload, null, 2)).then(function () { return w.close(); });
+        });
+      }).then(function () { lastBackupName = name; });
+    }).then(function () {
+      var names = [];
+      var it = dirHandle.values();
+      function step() {
+        return it.next().then(function (r) {
+          if (r.done) return;
+          if (r.value && r.value.kind === 'file' && r.value.name.indexOf(window.QuizGuard.BACKUP_PREFIX) === 0) names.push(r.value.name);
+          return step();
+        });
+      }
+      return step().then(function () {
+        return window.QuizGuard.planRotation(names, window.QuizGuard.KEEP_BACKUPS)
+          .reduce(function (p, n) { return p.then(function () { return dirHandle.removeEntry(n); }); }, Promise.resolve());
+      });
+    }).then(function () {
+      backupError = null; backupNeedsPermission = false;
+      refreshGuardUI();
+    }).catch(function (e) {
+      backupError = e && e.message ? e.message : String(e);
+      refreshGuardUI();
+    });
+  }
+
+  // 页面隐藏/关闭时尽力补刷未落盘的备份（异步写不保证完成，见边界说明）
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden' && backupTimer) doBackup();
+  });
+  window.addEventListener('pagehide', function () { if (backupTimer) doBackup(); });
+
+  function initBackup() {
+    if (!FS_SUPPORTED) return;
+    idbGet('backupDir').then(function (h) {
+      if (!h) return null;
+      dirHandle = h;
+      return h.queryPermission ? h.queryPermission({ mode: 'readwrite' }) : 'granted';
+    }).then(function (perm) {
+      if (dirHandle && perm === 'granted') scheduleBackup(5000); // 启动 5 秒后补一份，缩小备份时间差
+      else if (dirHandle) backupNeedsPermission = true;
+      refreshGuardUI();
+    }).catch(function () {});
+  }
+
+  /* ================= 防护横幅（页头下方常驻） ================= */
+  function refreshGuardUI() {
+    var area = document.getElementById('guard-area');
+    if (!area) return;
+    var html = '';
+    if (booted && store) {
+      var rem = guard.exportReminder(Date.now(), Object.keys(store.records).length);
+      if (rem.show) html += '<div class="guard-banner danger">🔴 导出提醒：' + esc(rem.reason) + '。请到"📊 统计"页手动导出进度。</div>';
+      if (!FS_SUPPORTED) html += '<div class="guard-banner warn">⚠️ 当前环境无法自动备份到磁盘（file:// 或浏览器限制），请定期手动导出。</div>';
+      else if (!dirHandle) html += '<div class="guard-banner warn">💡 自动备份未配置：到"📊 统计"页选择备份文件夹（自动保留最近 ' + window.QuizGuard.KEEP_BACKUPS + ' 份带时间戳 JSON）。</div>';
+      else if (backupNeedsPermission) html += '<div class="guard-banner warn">🔑 自动备份权限待确认：到"📊 统计"页点击"恢复自动备份授权"。</div>';
+      else if (backupError) html += '<div class="guard-banner warn">⚠️ 上次自动备份失败：' + esc(backupError) + '</div>';
+    }
+    area.innerHTML = html;
+  }
+
+  /* ================= 空档恢复引导页（场景 a 用户选择先导入时） ================= */
+  function renderRecoveryGate() {
+    main.innerHTML = '<h2 class="page-title">🛡️ 本地进度数据缺失</h2>' +
+      '<div class="page-sub">浏览器数据疑似被清除（例如执行过"清除 Cookie 和其他网站数据"）。为避免用旧种子覆盖现场，应用尚未载入任何数据。</div>' +
+      '<div class="card-grid"><div class="chap-card" id="gate-import"><div class="t">📥 导入备份文件恢复（推荐）</div>' +
+      '<div class="meta"><span>选择 acp-quiz-*.json（手动导出或自动备份均可）</span></div></div>' +
+      '<div class="chap-card" id="gate-seed"><div class="t">⚠️ 用 10/30 播种存档继续</div>' +
+      '<div class="meta"><span>接受近期进度丢失，仅在没有任何备份时选择</span></div></div></div>';
+    document.getElementById('gate-import').addEventListener('click', function () {
+      var inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.json,application/json';
+      inp.onchange = function () {
+        if (!inp.files || !inp.files[0]) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var ext = progress.readImport(JSON.parse(reader.result));
+            store = ext;
+            progress.save(store);
+            guard.markSaved(Object.keys(store.records).length);
+            alert('恢复完成！作答 ' + Object.keys(store.records).length + ' 条、收藏 ' + store.stars.length + ' 个、错题 ' + store.wrongs.length + ' 个');
+            boot();
+          } catch (e) {
+            alert('导入失败：' + e.message + '\n应用仍未载入任何数据，可重试或换一份备份。');
+          }
+        };
+        reader.readAsText(inp.files[0]);
+      };
+      inp.click();
+    });
+    document.getElementById('gate-seed').addEventListener('click', function () {
+      try {
+        store = progress.load();
+        if (guard.watermark() === null) guard.markSaved(Object.keys(store.records).length);
+        boot();
+      } catch (e) {
+        alert('播种失败：' + e.message);
+      }
+    });
+  }
+
   /* ================= 启动 ================= */
-  document.getElementById('total-count').textContent = QS.length;
-  updateBadges();
-  go('home');
+  function boot() {
+    booted = true;
+    document.getElementById('total-count').textContent = QS.length;
+    updateBadges();
+    go('home');
+    initBackup();
+    refreshGuardUI();
+  }
+  if (pendingGate) renderRecoveryGate();
+  else boot();
 })();
